@@ -277,9 +277,10 @@ class FaceDetectorPipeline:
             # For each segment, generate a lower third at the start
             for seg_frames in segments_frames:
                 tc_in_frame = seg_frames[0]
-                # Lower third duration in frames
+                # Lower third duration in frames, but never exceed segment end
                 lt_duration_frames = int(self.lower_third_duration * self.fps)
-                tc_out_frame = tc_in_frame + lt_duration_frames
+                seg_end_frame = seg_frames[-1]
+                tc_out_frame = min(tc_in_frame + lt_duration_frames, seg_end_frame)
 
                 segment = TimecodeSegment(
                     name=cluster.name,
