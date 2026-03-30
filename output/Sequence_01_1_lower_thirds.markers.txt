@@ -1,0 +1,4 @@
+Color	Name	Comment	TC1	TC2
+Cyan	Jan Janssen	Jan Janssen | Directeur	00:00:00:00	00:00:04:21
+Cyan	Marie Bakker	Marie Bakker | Verslaggever	00:00:10:01	00:00:14:23
+Cyan	Peter de Vries	Peter de Vries | Analist	00:00:45:14	00:00:50:11
