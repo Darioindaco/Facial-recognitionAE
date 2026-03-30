@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 
 import cv2
 import numpy as np
+from PIL import Image, ImageDraw, ImageFont
 from insightface.app import FaceAnalysis
 from sklearn.cluster import DBSCAN
 
@@ -53,6 +54,8 @@ class TimecodeSegment:
     title: str
     tc_in: str
     tc_out: str
+    frame_in: int = 0
+    frame_out: int = 0
 
 
 # ─── Timecode utilities ─────────────────────────────────────────────────────
@@ -81,6 +84,7 @@ class FaceDetectorPipeline:
         cluster_min_samples: int = 2,
         min_segment_frames: int = 1,
         lower_third_duration: float = 5.0,
+        render: bool = False,
     ):
         self.video_path = video_path
         self.sample_interval = sample_interval
@@ -89,6 +93,7 @@ class FaceDetectorPipeline:
         self.cluster_min_samples = cluster_min_samples
         self.min_segment_frames = min_segment_frames
         self.lower_third_duration = lower_third_duration
+        self.render = render
 
         self.detections: list[FaceDetection] = []
         self.clusters: list[PersonCluster] = []
@@ -116,9 +121,16 @@ class FaceDetectorPipeline:
         self._build_segments()
         output_path = self._write_csv()
 
-        print(f"\n{'='*60}")
-        print(f"  Done! CSV written to: {output_path}")
-        print(f"{'='*60}\n")
+        if self.render:
+            render_path = self._render_video()
+            print(f"\n{'='*60}")
+            print(f"  Done! CSV: {output_path}")
+            print(f"        Video: {render_path}")
+            print(f"{'='*60}\n")
+        else:
+            print(f"\n{'='*60}")
+            print(f"  Done! CSV written to: {output_path}")
+            print(f"{'='*60}\n")
         return output_path
 
     # ── Step 1: Frame extraction + face detection ────────────────────────
@@ -287,6 +299,8 @@ class FaceDetectorPipeline:
                     title=cluster.title,
                     tc_in=frame_to_timecode(tc_in_frame, self.fps),
                     tc_out=frame_to_timecode(tc_out_frame, self.fps),
+                    frame_in=tc_in_frame,
+                    frame_out=tc_out_frame,
                 )
                 self.segments.append(segment)
 
@@ -294,7 +308,108 @@ class FaceDetectorPipeline:
         self.segments.sort(key=lambda s: s.tc_in)
         print(f"  Generated {len(self.segments)} lower third segment(s).")
 
-    # ── Step 5: Write CSV ────────────────────────────────────────────────
+    # ── Step 5 (optional): Render lower thirds onto video ──────────────
+
+    def _render_video(self) -> str:
+        """Render video with lower third text overlay, respecting TV-safe margins."""
+        print(f"\n[5/5] Rendering video with lower thirds...")
+
+        base = os.path.splitext(os.path.basename(self.video_path))[0]
+        render_path = os.path.join("output", f"{base}_lower_thirds.mp4")
+        os.makedirs("output", exist_ok=True)
+
+        cap = cv2.VideoCapture(self.video_path)
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        out = cv2.VideoWriter(render_path, fourcc, self.fps, (w, h))
+
+        # TV title-safe margin: 10% on each side (EBU / broadcast standard)
+        margin_x = int(w * 0.10)
+        margin_y = int(h * 0.10)
+
+        # Font sizing relative to frame height
+        name_font_size = max(int(h * 0.035), 16)
+        title_font_size = max(int(h * 0.025), 12)
+
+        # Try to load a clean sans-serif font
+        font_paths = [
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        ]
+        title_font_paths = [
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        ]
+
+        name_font = ImageFont.load_default()
+        title_font = ImageFont.load_default()
+        for fp in font_paths:
+            if os.path.isfile(fp):
+                name_font = ImageFont.truetype(fp, name_font_size)
+                break
+        for fp in title_font_paths:
+            if os.path.isfile(fp):
+                title_font = ImageFont.truetype(fp, title_font_size)
+                break
+
+        frame_number = 0
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            # Check which segments are active on this frame
+            active = [s for s in self.segments if s.frame_in <= frame_number <= s.frame_out]
+
+            if active:
+                # Convert OpenCV BGR to PIL RGB
+                pil_img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                draw = ImageDraw.Draw(pil_img, "RGBA")
+
+                for i, seg in enumerate(active):
+                    # Position: lower-left, inside title-safe area
+                    # Stack multiple lower thirds upward if overlapping
+                    line_height = name_font_size + title_font_size + int(h * 0.015)
+                    text_y = h - margin_y - line_height - (i * (line_height + int(h * 0.02)))
+                    text_x = margin_x
+
+                    # Semi-transparent background bar
+                    name_bbox = draw.textbbox((0, 0), seg.name, font=name_font)
+                    title_bbox = draw.textbbox((0, 0), seg.title, font=title_font)
+                    bar_w = max(name_bbox[2] - name_bbox[0], title_bbox[2] - title_bbox[0]) + int(w * 0.04)
+                    bar_h = line_height + int(h * 0.015)
+                    bar_x = text_x - int(w * 0.015)
+                    bar_y = text_y - int(h * 0.008)
+
+                    draw.rectangle(
+                        [bar_x, bar_y, bar_x + bar_w, bar_y + bar_h],
+                        fill=(0, 0, 0, 160),
+                    )
+
+                    # Name line (bold, white)
+                    draw.text((text_x, text_y), seg.name, font=name_font, fill=(255, 255, 255, 255))
+
+                    # Title line (regular, lighter)
+                    title_y = text_y + name_font_size + int(h * 0.005)
+                    draw.text((text_x, title_y), seg.title, font=title_font, fill=(200, 200, 200, 255))
+
+                # Convert back to OpenCV BGR
+                frame = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+
+            out.write(frame)
+            frame_number += 1
+
+            if frame_number % 250 == 0:
+                pct = (frame_number / self.total_frames * 100) if self.total_frames > 0 else 0
+                print(f"  Rendering: {pct:.0f}%")
+
+        cap.release()
+        out.release()
+        print(f"  Rendered {frame_number} frames to: {render_path}")
+        return render_path
+
+    # ── Step 6: Write CSV ────────────────────────────────────────────────
 
     def _write_csv(self) -> str:
         """Write segments to CSV file."""
@@ -325,6 +440,7 @@ def main():
 Example:
   python face_detector.py input_video.mp4
   python face_detector.py input_video.mp4 --interval 6 --duration 4.0
+  python face_detector.py input_video.mp4 --render
 
 Output CSV format (read by After Effects ExtendScript):
   name, title, tc_in, tc_out
@@ -352,6 +468,10 @@ Output CSV format (read by After Effects ExtendScript):
         "--duration", type=float, default=5.0,
         help="Lower third display duration in seconds (default: 5.0)",
     )
+    parser.add_argument(
+        "--render", action="store_true",
+        help="Render output video with default lower third template burned in",
+    )
 
     args = parser.parse_args()
 
@@ -365,6 +485,7 @@ Output CSV format (read by After Effects ExtendScript):
         cluster_eps=args.cluster_eps,
         cluster_min_samples=args.cluster_min,
         lower_third_duration=args.duration,
+        render=args.render,
     )
     pipeline.run()
 
