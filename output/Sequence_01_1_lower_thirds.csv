@@ -1,0 +1,4 @@
+name,title,tc_in,tc_out
+Person A,Functie A,00:00:00:00,00:00:04:20
+Person B,Functie B,00:00:10:02,00:00:14:22
+Person C,Functie C,00:00:45:15,00:00:50:10
