@@ -91,6 +91,15 @@ def generate_jsx(data: list[dict], output_path: str = "output/import_lowerthirds
         return;
     }}
 
+    // ── Ensure comp is long enough ─────────────────────────────────
+    var maxEnd = 0;
+    for (var i = 0; i < data.length; i++) {{
+        if (data[i].end > maxEnd) maxEnd = data[i].end;
+    }}
+    if (mainComp.duration < maxEnd + 1) {{
+        mainComp.duration = maxEnd + 1;
+    }}
+
     // ── Process entries ─────────────────────────────────────────────
     app.beginUndoGroup("Import Lower Thirds");
 
