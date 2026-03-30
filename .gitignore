@@ -12,6 +12,8 @@ env/
 *.mxf
 *.avi
 output/*.csv
+output/*.mp4
+output/*.png
 models/
 test_videos/
 .DS_Store
