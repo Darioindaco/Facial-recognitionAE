@@ -87,6 +87,7 @@ class FaceDetectorPipeline:
         lower_third_duration: float = 5.0,
         render: bool = False,
         avid: bool = False,
+        ae: bool = False,
     ):
         self.video_path = video_path
         self.sample_interval = sample_interval
@@ -97,6 +98,7 @@ class FaceDetectorPipeline:
         self.lower_third_duration = lower_third_duration
         self.render = render
         self.avid = avid
+        self.ae = ae
 
         self.detections: list[FaceDetection] = []
         self.clusters: list[PersonCluster] = []
@@ -131,6 +133,10 @@ class FaceDetectorPipeline:
             marker_path = self._write_avid_markers()
             outputs.append(f"AVID SubCap: {subcap_path}")
             outputs.append(f"AVID Markers: {marker_path}")
+
+        if self.ae:
+            jsx_path = self._write_ae_jsx()
+            outputs.append(f"AE JSX: {jsx_path}")
 
         if self.render:
             render_path = self._render_video()
@@ -498,6 +504,26 @@ class FaceDetectorPipeline:
         print(f"  AVID Markers: {marker_path}")
         return marker_path
 
+    def _write_ae_jsx(self) -> str:
+        """Write After Effects ExtendScript for template-based lower thirds."""
+        from generate_jsx import generate_jsx, timecode_to_seconds
+
+        base = os.path.splitext(os.path.basename(self.video_path))[0]
+        jsx_path = os.path.join("output", f"{base}_lower_thirds.jsx")
+
+        data = []
+        for seg in self.segments:
+            data.append({
+                "name": seg.name,
+                "title": seg.title,
+                "start": timecode_to_seconds(seg.tc_in, self.fps),
+                "end": timecode_to_seconds(seg.tc_out, self.fps),
+            })
+
+        generate_jsx(data, jsx_path)
+        print(f"  AE JSX: {jsx_path}")
+        return jsx_path
+
 
 # ─── CLI ─────────────────────────────────────────────────────────────────────
 
@@ -545,6 +571,10 @@ Output CSV format (read by After Effects ExtendScript):
         "--avid", action="store_true",
         help="Export AVID SubCap + Marker files for editable titles in Media Composer",
     )
+    parser.add_argument(
+        "--ae", action="store_true",
+        help="Generate After Effects ExtendScript (.jsx) for template-based lower thirds",
+    )
 
     args = parser.parse_args()
 
@@ -560,6 +590,7 @@ Output CSV format (read by After Effects ExtendScript):
         lower_third_duration=args.duration,
         render=args.render,
         avid=args.avid,
+        ae=args.ae,
     )
     pipeline.run()
 
