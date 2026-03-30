@@ -13,6 +13,7 @@ Pipeline:
 import argparse
 import csv
 import os
+import subprocess
 import sys
 from dataclasses import dataclass, field
 
@@ -311,18 +312,16 @@ class FaceDetectorPipeline:
     # ── Step 5 (optional): Render lower thirds onto video ──────────────
 
     def _render_video(self) -> str:
-        """Render video with lower third text overlay, respecting TV-safe margins."""
-        print(f"\n[5/5] Rendering video with lower thirds...")
+        """Render lower thirds as ProRes 4444 MOV with alpha (transparent background)."""
+        print(f"\n[5/5] Rendering ProRes 4444 with alpha...")
 
         base = os.path.splitext(os.path.basename(self.video_path))[0]
-        render_path = os.path.join("output", f"{base}_lower_thirds.mp4")
+        render_path = os.path.join("output", f"{base}_lower_thirds.mov")
         os.makedirs("output", exist_ok=True)
 
         cap = cv2.VideoCapture(self.video_path)
         w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        out = cv2.VideoWriter(render_path, fourcc, self.fps, (w, h))
 
         # TV title-safe margin: 10% on each side (EBU / broadcast standard)
         margin_x = int(w * 0.10)
@@ -353,6 +352,24 @@ class FaceDetectorPipeline:
                 title_font = ImageFont.truetype(fp, title_font_size)
                 break
 
+        # Pipe raw RGBA frames to ffmpeg for ProRes 4444 encoding
+        ffmpeg_cmd = [
+            "ffmpeg", "-y",
+            "-f", "rawvideo",
+            "-pix_fmt", "rgba",
+            "-s", f"{w}x{h}",
+            "-r", str(self.fps),
+            "-i", "-",
+            "-c:v", "prores_ks",
+            "-profile:v", "4444",
+            "-pix_fmt", "yuva444p10le",
+            render_path,
+        ]
+        ffmpeg_proc = subprocess.Popen(
+            ffmpeg_cmd, stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        )
+
         frame_number = 0
         while True:
             ret, frame = cap.read()
@@ -362,9 +379,10 @@ class FaceDetectorPipeline:
             # Check which segments are active on this frame
             active = [s for s in self.segments if s.frame_in <= frame_number <= s.frame_out]
 
+            # Start with fully transparent RGBA frame
+            pil_img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+
             if active:
-                # Convert OpenCV BGR to PIL RGB
-                pil_img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
                 draw = ImageDraw.Draw(pil_img, "RGBA")
 
                 for i, seg in enumerate(active):
@@ -394,10 +412,8 @@ class FaceDetectorPipeline:
                     title_y = text_y + name_font_size + int(h * 0.005)
                     draw.text((text_x, title_y), seg.title, font=title_font, fill=(200, 200, 200, 255))
 
-                # Convert back to OpenCV BGR
-                frame = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
-
-            out.write(frame)
+            # Write RGBA frame to ffmpeg
+            ffmpeg_proc.stdin.write(np.array(pil_img).tobytes())
             frame_number += 1
 
             if frame_number % 250 == 0:
@@ -405,8 +421,15 @@ class FaceDetectorPipeline:
                 print(f"  Rendering: {pct:.0f}%")
 
         cap.release()
-        out.release()
-        print(f"  Rendered {frame_number} frames to: {render_path}")
+        ffmpeg_proc.stdin.close()
+        ffmpeg_proc.wait()
+
+        if ffmpeg_proc.returncode != 0:
+            err = ffmpeg_proc.stderr.read().decode()
+            print(f"  ffmpeg error: {err}")
+        else:
+            print(f"  Rendered {frame_number} frames to: {render_path}")
+
         return render_path
 
     # ── Step 6: Write CSV ────────────────────────────────────────────────

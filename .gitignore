@@ -13,6 +13,7 @@ env/
 *.avi
 output/*.csv
 output/*.mp4
+output/*.mov
 output/*.png
 models/
 test_videos/
